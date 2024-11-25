@@ -24,14 +24,14 @@ Oxipng is known to be packaged for the environments listed below.
 
 [![Packaging status](https://repology.org/badge/vertical-allrepos/oxipng.svg?exclude_unsupported=1&columns=3&exclude_sources=modules,site)](https://repology.org/project/oxipng/versions)
 
-Alternatively, oxipng can be installed from Cargo, via the following command:
+Alternatively, Oxipng can be installed from Cargo, via the following command:
 
 ```
 cargo install oxipng
 ```
 
 Oxipng can also be built from source using the latest stable or nightly Rust.
-This is primarily useful for developing on oxipng.
+This is primarily useful for developing on Oxipng.
 
 ```
 git clone https://github.com/shssoichiro/oxipng.git
@@ -93,61 +93,39 @@ repos:
 ```
 [pre-commit]: https://pre-commit.com/
 
-## Git integration via [Trunk]
+## Docker
 
-[Trunk] is an extendable superlinter which can be used to run `oxipng` to automatically optimize `png`s when committing them into a git repo, or to gate any `png`s being added to a git repo on whether they are optimized. The [trunk] oxipng integration is [here](https://github.com/trunk-io/plugins/tree/main/linters/oxipng).
+A Docker image is availlable at `ghcr.io/shssoichiro/oxipng` for `linux/amd64` and `linux/arm64`.
 
-To enable oxipng via [trunk]:
-
-```bash
-# to get the latest version:
-trunk check enable oxipng
-
-# to get a specific version:
-trunk check enable oxipng@9.0.0
-```
-
-or modify `.trunk/trunk.yaml` in your repo to contain:
-
-```
-lint:
-  enabled:
-    - oxipng@9.0.0
-```
-
-Then just run:
+You can use it the following way:
 
 ```bash
-# to optimize a png:
-trunk fmt <file>
-
-# to check if a png is already optimized:
-trunk check <file>
+docker run --rm -v $(pwd):/work ghcr.io/shssoichiro/oxipng -o 4 /work/file.png
 ```
-
-You can setup [trunk] to [manage your git hooks](https://docs.trunk.io/docs/actions-git-hooks) and automatically optimize any `png`s you commit to git, _when_ you `git commit`. To enable this, run:
-
-```bash
-trunk actions enable trunk-fmt-pre-commit
-```
-
-[trunk]: https://docs.trunk.io
 
 ## Library Usage
 
-Although originally intended to be used as an executable, oxipng can also be used as a library in
-other Rust projects. To do so, simply add oxipng as a dependency in your Cargo.toml,
-then `extern crate oxipng` in your project. You should then have access to all of the library
-functions [documented here](https://docs.rs/oxipng). The simplest
-method of usage involves creating an
-[Options struct](https://docs.rs/oxipng/latest/oxipng/struct.Options.html) and
-passing it, along with an input filename, into the
-[optimize function](https://docs.rs/oxipng/latest/oxipng/fn.optimize.html).
+Although originally intended to be used as an executable, Oxipng can also be used as a library in
+other Rust projects. To do so, simply add Oxipng as a dependency in your Cargo.toml. You should then
+have access to all of the library functions [documented here](https://docs.rs/oxipng). The simplest
+method of usage involves creating an [Options
+struct](https://docs.rs/oxipng/latest/oxipng/struct.Options.html) and passing it, along with an
+input filename, into the [optimize function](https://docs.rs/oxipng/latest/oxipng/fn.optimize.html).
 
-It is recommended to disable the "binary" feature when including oxipng as a library. Currently, there is
+It is recommended to disable the "binary" feature when including Oxipng as a library. Currently, there is
 no simple way to just disable one feature in Cargo, it has to be done by disabling default features
 and specifying the desired ones, for example:
 `oxipng = { version = "9.0", features = ["parallel", "zopfli", "filetime"], default-features = false }`
+
+## Software using Oxipng
+
+- [ImageOptim](https://imageoptim.com): Mac app and web service for optimizing images
+- [Squoosh](https://squoosh.app): Web app for optimizing images
+- [FileOptimizer](https://nikkhokkho.sourceforge.io/?page=FileOptimizer): Windows app for optimizing files
+- [Curtial](https://github.com/Huluti/Curtail): Linux app for optimizing images
+- [pyoxipng](https://pypi.org/project/pyoxipng/): Python wrapper for Oxipng
+- [jSquash](https://github.com/jamsinclair/jSquash): Collection of WebAssembly image codecs
+- [Trunk](https://trunk.io): Developer experience toolkit for managing code
 
 ## History
 
@@ -177,7 +155,7 @@ Oxipng is open-source software, distributed under the MIT license.
 
 ## Benchmarks
 
-Tested OxiPNG 9.0.0 (commit `c16519b38b0519988db625913be919d4f0e42f5d`, compiled
+Tested Oxipng 9.0.0 (commit `c16519b38b0519988db625913be919d4f0e42f5d`, compiled
 on `rustc 1.74.0-nightly (7b4d9e155 2023-09-28)`) against OptiPNG version 0.7.7,
 as packaged by Debian unstable, on a Linux 6.5.0-2-amd64 kernel, Intel Core
 i7-12700 CPU (8 performance cores, 4 efficiency cores, 20 threads), DDR5-5200
@@ -210,39 +188,3 @@ Summary
     5.01 ± 0.25 times faster than optipng -o 4 -simulate ./tests/files/rgb_16_should_be_grayscale_8.png
 
 ```
-
-<details>
-<summary>Older benchmark</summary>
-
-Tested oxipng 5.0.0 (compiled on rustc 1.55.0-nightly (7a16cfcff 2021-07-11)) against OptiPNG version 0.7.7 on AMD Ryzen 7 4800H with Radeon Graphics with 16 logical cores
-
-```
-
-Benchmark #1: ./target/release/oxipng -P ./tests/files/rgb_16_should_be_grayscale_8.png
-  Time (mean ± σ):     128.8 ms ±  14.2 ms    [User: 296.0 ms, System: 14.3 ms]
-  Range (min … max):    98.8 ms … 152.3 ms    21 runs
-
-Benchmark #2: optipng -simulate ./tests/files/rgb_16_should_be_grayscale_8.png
-  Time (mean ± σ):     254.2 ms ±  16.0 ms    [User: 252.8 ms, System: 1.2 ms]
-  Range (min … max):   208.4 ms … 263.8 ms    14 runs
-
-Summary
-  './target/release/oxipng -P ./tests/files/rgb_16_should_be_grayscale_8.png' ran
-    1.97 ± 0.25 times faster than 'optipng -simulate ./tests/files/rgb_16_should_be_grayscale_8.png'
-
-
-
-Benchmark #1: ./target/release/oxipng -o4 -P ./tests/files/rgb_16_should_be_grayscale_8.png
-  Time (mean ± σ):     141.4 ms ±  14.9 ms    [User: 611.7 ms, System: 21.1 ms]
-  Range (min … max):   100.2 ms … 160.4 ms    23 runs
-
-Benchmark #2: optipng -o 4 -simulate ./tests/files/rgb_16_should_be_grayscale_8.png
-  Time (mean ± σ):     730.0 ms ±  25.9 ms    [User: 728.0 ms, System: 1.2 ms]
-  Range (min … max):   713.3 ms … 768.2 ms    10 runs
-
-Summary
-  './target/release/oxipng -o4 -P ./tests/files/rgb_16_should_be_grayscale_8.png' ran
-    5.16 ± 0.58 times faster than 'optipng -o 4 -simulate ./tests/files/rgb_16_should_be_grayscale_8.png'
-
-```
-</details>
