@@ -2,8 +2,6 @@
 use std::cell::RefCell;
 #[cfg(feature = "zopfli")]
 use std::num::NonZeroU8;
-#[cfg(feature = "filetime")]
-use std::ops::Deref;
 use std::{
     fs::remove_file,
     path::{Path, PathBuf},
@@ -12,10 +10,8 @@ use std::{
 use indexmap::indexset;
 use oxipng::{internal_tests::*, *};
 
-const GRAYSCALE: u8 = 0;
 const RGB: u8 = 2;
 const INDEXED: u8 = 3;
-const RGBA: u8 = 6;
 
 fn get_opts(input: &Path) -> (OutFile, oxipng::Options) {
     let mut options = oxipng::Options {
@@ -96,7 +92,7 @@ fn test_it_converts(
         bit_depth_out,
         |_| {},
         |_| {},
-    )
+    );
 }
 
 #[test]
@@ -185,9 +181,9 @@ fn verbose_mode() {
         "    8-bit RGB, non-interlaced",
         "    IDAT size = 113794 bytes",
         "    File size = 114708 bytes",
-        "Trying: 1 filters",
-        "Found better combination:",
-        "    zc = 11  f = None ",
+        "Trying 1 filters with zc = ",
+        "Found better result:",
+        "    zc = 11, f = None",
         "    IDAT size = ",
         "    file size = ",
     ];
@@ -196,10 +192,7 @@ fn verbose_mode() {
         let expected_prefix = expected_prefixes[i];
         assert!(
             log.starts_with(expected_prefix),
-            "logs[{}] = {:?} doesn't start with {:?}",
-            i,
-            log,
-            expected_prefix
+            "logs[{i}] = {log:?} doesn't start with {expected_prefix:?}"
         );
     }
 }
@@ -542,8 +535,8 @@ fn preserve_attrs() {
 
         let cellref_atime_canon = atime_canon.borrow();
         let cellref_mtime_canon = mtime_canon.borrow();
-        let ref_atime_canon: &filetime::FileTime = cellref_atime_canon.deref();
-        let ref_mtime_canon: &filetime::FileTime = cellref_mtime_canon.deref();
+        let ref_atime_canon: &filetime::FileTime = &cellref_atime_canon;
+        let ref_mtime_canon: &filetime::FileTime = &cellref_mtime_canon;
 
         assert_eq!(
             ref_atime_canon,
@@ -582,7 +575,7 @@ fn fix_errors() {
 
     let png = PngData::new(&input, &opts).unwrap();
 
-    assert_eq!(png.raw.ihdr.color_type.png_header_code(), RGBA);
+    assert_eq!(png.raw.ihdr.color_type.png_header_code(), INDEXED);
     assert_eq!(png.raw.ihdr.bit_depth, BitDepth::Eight);
 
     match oxipng::optimize(&InFile::Path(input), &output, &opts) {
@@ -600,7 +593,7 @@ fn fix_errors() {
         }
     };
 
-    assert_eq!(png.raw.ihdr.color_type.png_header_code(), GRAYSCALE);
+    assert_eq!(png.raw.ihdr.color_type.png_header_code(), INDEXED);
     assert_eq!(png.raw.ihdr.bit_depth, BitDepth::Eight);
 
     // Cannot check if pixels are equal because image crate cannot read corrupt (input) PNGs
@@ -688,9 +681,9 @@ fn zopfli_mode() {
         input,
         &output,
         &opts,
-        INDEXED,
+        RGB,
         BitDepth::Eight,
-        INDEXED,
+        RGB,
         BitDepth::Eight,
     );
 }

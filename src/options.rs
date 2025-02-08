@@ -9,6 +9,8 @@ use log::warn;
 
 use crate::{deflate::Deflaters, filters::RowFilter, headers::StripChunks, interlace::Interlacing};
 
+/// Write destination for [`optimize`][crate::optimize].
+/// You can use [`optimize_from_memory`](crate::optimize_from_memory) to avoid external I/O.
 #[derive(Clone, Debug)]
 pub enum OutFile {
     /// Don't actually write any output, just calculate the best results.
@@ -29,6 +31,7 @@ impl OutFile {
     /// Construct a new `OutFile` with the given path.
     ///
     /// This is a convenience method for `OutFile::Path { path: Some(path), preserve_attrs: false }`.
+    #[must_use]
     pub fn from_path(path: PathBuf) -> Self {
         OutFile::Path {
             path: Some(path),
@@ -36,9 +39,10 @@ impl OutFile {
         }
     }
 
+    #[must_use]
     pub fn path(&self) -> Option<&Path> {
         match *self {
-            OutFile::Path {
+            Self::Path {
                 path: Some(ref p), ..
             } => Some(p.as_path()),
             _ => None,
@@ -46,7 +50,8 @@ impl OutFile {
     }
 }
 
-/// Where to read images from
+/// Where to read images from in [`optimize`][crate::optimize].
+/// You can use [`optimize_from_memory`](crate::optimize_from_memory) to avoid external I/O.
 #[derive(Clone, Debug)]
 pub enum InFile {
     Path(PathBuf),
@@ -54,10 +59,11 @@ pub enum InFile {
 }
 
 impl InFile {
+    #[must_use]
     pub fn path(&self) -> Option<&Path> {
         match *self {
-            InFile::Path(ref p) => Some(p.as_path()),
-            InFile::StdIn => None,
+            Self::Path(ref p) => Some(p.as_path()),
+            Self::StdIn => None,
         }
     }
 }
@@ -65,15 +71,15 @@ impl InFile {
 impl fmt::Display for InFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            InFile::Path(ref p) => write!(f, "{}", p.display()),
-            InFile::StdIn => f.write_str("stdin"),
+            Self::Path(ref p) => write!(f, "{}", p.display()),
+            Self::StdIn => f.write_str("stdin"),
         }
     }
 }
 
 impl<T: Into<PathBuf>> From<T> for InFile {
     fn from(s: T) -> Self {
-        InFile::Path(s.into())
+        Self::Path(s.into())
     }
 }
 
@@ -88,19 +94,22 @@ pub struct Options {
     ///
     /// Default: `false`
     pub force: bool,
-    /// Which RowFilters to try on the file
+    /// Which `RowFilters` to try on the file
     ///
     /// Default: `None,Sub,Entropy,Bigrams`
     pub filter: IndexSet<RowFilter>,
     /// Whether to change the interlacing type of the file.
     ///
-    /// `None` will not change the current interlacing type.
-    ///
-    /// `Some(x)` will change the file to interlacing mode `x`.
+    /// These are the interlacing types avaliable:
+    /// - `None` will not change the current interlacing type.
+    /// - `Some(x)` will change the file to interlacing mode `x`.
+    ///   See [`Interlacing`] for the possible interlacing types.
     ///
     /// Default: `Some(Interlacing::None)`
     pub interlace: Option<Interlacing>,
     /// Whether to allow transparent pixels to be altered to improve compression.
+    ///
+    /// Default: `false`
     pub optimize_alpha: bool,
     /// Whether to attempt bit depth reduction
     ///
@@ -133,7 +142,8 @@ pub struct Options {
     ///
     /// Default: `None`
     pub strip: StripChunks,
-    /// Which DEFLATE algorithm to use
+    /// Which DEFLATE (zlib) algorithm to use
+    #[cfg_attr(feature = "zopfli", doc = "(e.g. Zopfli)")]
     ///
     /// Default: `Libdeflater`
     pub deflate: Deflaters,
@@ -141,15 +151,17 @@ pub struct Options {
     ///
     /// Default: `true`
     pub fast_evaluation: bool,
-
     /// Maximum amount of time to spend on optimizations.
     /// Further potential optimizations are skipped if the timeout is exceeded.
+    ///
+    /// Default: `None`
     pub timeout: Option<Duration>,
 }
 
 impl Options {
-    pub fn from_preset(level: u8) -> Options {
-        let opts = Options::default();
+    #[must_use]
+    pub fn from_preset(level: u8) -> Self {
+        let opts = Self::default();
         match level {
             0 => opts.apply_preset_0(),
             1 => opts.apply_preset_1(),
@@ -165,8 +177,9 @@ impl Options {
         }
     }
 
-    pub fn max_compression() -> Options {
-        Options::from_preset(6)
+    #[must_use]
+    pub fn max_compression() -> Self {
+        Self::from_preset(6)
     }
 
     // The following methods make assumptions that they are operating
@@ -229,9 +242,9 @@ impl Options {
 }
 
 impl Default for Options {
-    fn default() -> Options {
+    fn default() -> Self {
         // Default settings based on -o 2 from the CLI interface
-        Options {
+        Self {
             fix_errors: false,
             force: false,
             filter: indexset! {RowFilter::None, RowFilter::Sub, RowFilter::Entropy, RowFilter::Bigrams},

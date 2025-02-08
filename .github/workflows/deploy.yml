@@ -41,7 +41,7 @@ jobs:
           >> "$GITHUB_OUTPUT"
 
       - name: Retrieve ${{ matrix.target }} binary
-        uses: dawidd6/action-download-artifact@v6
+        uses: dawidd6/action-download-artifact@v8
         with:
           workflow: oxipng.yml
           commit: ${{ env.GITHUB_SHA }}
@@ -90,7 +90,6 @@ jobs:
         run: |
           mkdir -p "target/${{ matrix.target }}/release"
           mv target/oxipng "target/${{ matrix.target }}/release"
-          mv target/debug/assets "target/${{ matrix.target }}/release"
           cargo install --locked cargo-deb
           cargo deb --target "${{ matrix.target }}" --no-build --no-strip
 

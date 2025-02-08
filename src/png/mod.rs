@@ -12,6 +12,7 @@ use rgb::ComponentSlice;
 use rustc_hash::FxHashMap;
 
 use crate::{
+    apng::*,
     colors::{BitDepth, ColorType},
     deflate,
     error::PngError,
@@ -47,6 +48,8 @@ pub struct PngData {
     pub idat_data: Vec<u8>,
     /// All non-critical chunks from the PNG are stored here
     pub aux_chunks: Vec<Chunk>,
+    /// APNG frames
+    pub frames: Vec<Frame>,
 }
 
 impl PngData {
@@ -97,6 +100,8 @@ impl PngData {
         let mut idat_data: Vec<u8> = Vec::new();
         let mut key_chunks: FxHashMap<[u8; 4], Vec<u8>> = FxHashMap::default();
         let mut aux_chunks: Vec<Chunk> = Vec::new();
+        let mut frames: Vec<Frame> = Vec::new();
+        let mut sequence_number = 0;
         while let Some(chunk) = parse_next_chunk(byte_data, &mut byte_offset, opts.fix_errors)? {
             match &chunk.name {
                 b"IDAT" => {
@@ -105,25 +110,53 @@ impl PngData {
                         aux_chunks.push(Chunk {
                             name: chunk.name,
                             data: Vec::new(),
-                        })
+                        });
                     }
                     idat_data.extend_from_slice(chunk.data);
                 }
                 b"IHDR" | b"PLTE" | b"tRNS" => {
                     key_chunks.insert(chunk.name, chunk.data.to_owned());
                 }
-                _ => {
-                    if opts.strip.keep(&chunk.name) {
-                        aux_chunks.push(Chunk {
-                            name: chunk.name,
-                            data: chunk.data.to_owned(),
-                        })
-                    } else if chunk.name == *b"acTL" {
-                        warn!(
-                            "Stripping animation data from APNG - image will become standard PNG"
-                        );
+                _ if opts.strip.keep(&chunk.name) => {
+                    if chunk.is_c2pa() {
+                        // StripChunks::None is the default value, so to keep optimizing by default,
+                        // interpret it as stripping the C2PA metadata.
+                        // The C2PA metadata is invalidated if the file changes, so it shouldn't be kept.
+                        if opts.strip == StripChunks::None {
+                            continue;
+                        }
+                        return Err(PngError::C2PAMetadataPreventsChanges);
                     }
+                    if chunk.name == *b"fcTL" || chunk.name == *b"fdAT" {
+                        // Validate the sequence number
+                        if read_be_u32(&chunk.data[0..4]) != sequence_number {
+                            return Err(PngError::APNGOutOfOrder);
+                        }
+                        sequence_number += 1;
+                        if chunk.name == *b"fcTL" && !idat_data.is_empty() {
+                            // Only create a Frame if it's after the IDAT (else store it as an aux chunk)
+                            frames.push(Frame::from_fctl_data(chunk.data)?);
+                            continue;
+                        } else if chunk.name == *b"fdAT" {
+                            // Append the data to the last frame
+                            frames
+                                .last_mut()
+                                .ok_or(PngError::APNGOutOfOrder)?
+                                .data
+                                .extend_from_slice(&chunk.data[4..]);
+                            continue;
+                        }
+                    }
+                    // Regular ancillary chunk
+                    aux_chunks.push(Chunk {
+                        name: chunk.name,
+                        data: chunk.data.to_owned(),
+                    });
                 }
+                b"acTL" => {
+                    warn!("Stripping animation data from APNG - image will become standard PNG")
+                }
+                _ => (),
             }
         }
 
@@ -140,32 +173,26 @@ impl PngData {
             key_chunks.remove(b"PLTE"),
             key_chunks.remove(b"tRNS"),
         )?;
-        let raw_data = deflate::inflate(idat_data.as_ref(), ihdr.raw_data_size())?;
 
-        // Reject files with incorrect width/height or truncated data
-        if raw_data.len() != ihdr.raw_data_size() {
-            return Err(PngError::TruncatedData);
-        }
+        let raw = PngImage::new(ihdr, &idat_data)?;
 
-        let mut raw = PngImage {
-            ihdr,
-            data: raw_data,
-        };
-        raw.data = raw.unfilter_image()?;
         // Return the PngData
         Ok(Self {
             idat_data,
             raw: Arc::new(raw),
             aux_chunks,
+            frames,
         })
     }
 
     /// Return an estimate of the output size which can help with evaluation of very small data
+    #[must_use]
     pub fn estimated_output_size(&self) -> usize {
         self.idat_data.len() + self.raw.key_chunks_size()
     }
 
     /// Format the `PngData` struct into a valid PNG bytestream
+    #[must_use]
     pub fn output(&self) -> Vec<u8> {
         // PNG header
         let mut output = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -218,20 +245,30 @@ impl PngData {
                 transparent_color: Some(trns),
             } => {
                 // Transparency pixel - 6 byte RGB16
-                let trns_data: Vec<_> = trns.iter().flat_map(|c| c.to_be_bytes()).collect();
+                let trns_data: Vec<_> = trns.iter().flat_map(u16::to_be_bytes).collect();
                 write_png_block(b"tRNS", &trns_data, &mut output);
             }
             _ => {}
         }
         // Special ancillary chunks that need to come after PLTE but before IDAT
+        let mut sequence_number = 0;
         for chunk in aux_pre
             .iter()
             .filter(|c| matches!(&c.name, b"bKGD" | b"hIST" | b"tRNS" | b"fcTL"))
         {
             write_png_block(&chunk.name, &chunk.data, &mut output);
+            if &chunk.name == b"fcTL" {
+                sequence_number += 1;
+            }
         }
         // IDAT data
         write_png_block(b"IDAT", &self.idat_data, &mut output);
+        // APNG frames
+        for frame in self.frames.iter() {
+            write_png_block(b"fcTL", &frame.fctl_data(sequence_number), &mut output);
+            write_png_block(b"fdAT", &frame.fdat_data(sequence_number + 1), &mut output);
+            sequence_number += 2;
+        }
         // Ancillary chunks that come after IDAT
         for aux_post in aux_split {
             for chunk in aux_post {
@@ -246,13 +283,29 @@ impl PngData {
 }
 
 impl PngImage {
+    pub fn new(ihdr: IhdrData, compressed_data: &[u8]) -> Result<Self, PngError> {
+        let raw_data = deflate::inflate(compressed_data, ihdr.raw_data_size())?;
+
+        // Reject files with incorrect width/height or truncated data
+        if raw_data.len() != ihdr.raw_data_size() {
+            return Err(PngError::TruncatedData);
+        }
+
+        let mut image = Self {
+            ihdr,
+            data: raw_data,
+        };
+        image.data = image.unfilter_image()?;
+        Ok(image)
+    }
+
     /// Convert the image to the specified interlacing type
     /// Returns true if the interlacing was changed, false otherwise
     /// The `interlace` parameter specifies the *new* interlacing mode
     /// Assumes that the data has already been de-filtered
     #[inline]
     #[must_use]
-    pub fn change_interlacing(&self, interlace: Interlacing) -> Option<PngImage> {
+    pub fn change_interlacing(&self, interlace: Interlacing) -> Option<Self> {
         if interlace == self.ihdr.interlaced {
             return None;
         }
@@ -268,13 +321,15 @@ impl PngImage {
 
     /// Return the number of channels in the image, based on color type
     #[inline]
-    pub fn channels_per_pixel(&self) -> usize {
+    #[must_use]
+    pub const fn channels_per_pixel(&self) -> usize {
         self.ihdr.color_type.channels_per_pixel() as usize
     }
 
     /// Return the number of bytes per channel in the image
     #[inline]
-    pub fn bytes_per_channel(&self) -> usize {
+    #[must_use]
+    pub const fn bytes_per_channel(&self) -> usize {
         match self.ihdr.bit_depth {
             BitDepth::Sixteen => 2,
             // Depths lower than 8 will round up to 1 byte
@@ -283,6 +338,7 @@ impl PngImage {
     }
 
     /// Calculate the size of the PLTE and tRNS chunks
+    #[must_use]
     pub fn key_chunks_size(&self) -> usize {
         match &self.ihdr.color_type {
             ColorType::Indexed { palette } => {
@@ -301,6 +357,7 @@ impl PngImage {
 
     /// Return an iterator over the scanlines of the image
     #[inline]
+    #[must_use]
     pub fn scan_lines(&self, has_filter: bool) -> ScanLines<'_> {
         ScanLines::new(self, has_filter)
     }
@@ -328,6 +385,7 @@ impl PngImage {
     }
 
     /// Apply the specified filter type to all rows in the image
+    #[must_use]
     pub fn filter_image(&self, filter: RowFilter, optimize_alpha: bool) -> Vec<u8> {
         let mut filtered = Vec::with_capacity(self.data.len());
         let bpp = self.bytes_per_channel() * self.channels_per_pixel();
@@ -360,6 +418,15 @@ impl PngImage {
                 prev_line = line_data;
             } else {
                 // Heuristic filter selection strategies
+
+                if line_data.iter().all(|&x| x == 0) {
+                    // Assume None if the line is all zeros
+                    filtered.push(RowFilter::None as u8);
+                    filtered.extend_from_slice(&line_data);
+                    prev_line = line_data;
+                    continue;
+                }
+
                 let mut best_line = Vec::new();
                 let mut best_line_raw = Vec::new();
                 // Avoid vertical filtering on first line of each interlacing pass
@@ -393,7 +460,7 @@ impl PngImage {
                         for f in try_filters {
                             f.filter_line(bpp, &mut line_data, &prev_line, &mut f_buf, alpha_bytes);
                             let mut counts = vec![0; 0x100];
-                            for &i in f_buf.iter() {
+                            for &i in &f_buf {
                                 counts[i as usize] += 1;
                             }
                             let size = counts.into_iter().fold(0, |acc, x| {
@@ -417,7 +484,7 @@ impl PngImage {
                             f.filter_line(bpp, &mut line_data, &prev_line, &mut f_buf, alpha_bytes);
                             let mut set = bitarr![0; 0x10000];
                             for pair in f_buf.windows(2) {
-                                let bigram = (pair[0] as usize) << 8 | pair[1] as usize;
+                                let bigram = ((pair[0] as usize) << 8) | pair[1] as usize;
                                 set.set(bigram, true);
                             }
                             let size = set.count_ones();
@@ -437,7 +504,7 @@ impl PngImage {
                             f.filter_line(bpp, &mut line_data, &prev_line, &mut f_buf, alpha_bytes);
                             counts.clear();
                             for pair in f_buf.windows(2) {
-                                let bigram = (pair[0] as u16) << 8 | pair[1] as u16;
+                                let bigram = (u16::from(pair[0]) << 8) | u16::from(pair[1]);
                                 counts.entry(bigram).and_modify(|e| *e += 1).or_insert(1);
                             }
                             let size = counts.values().fold(0, |acc, &x| acc + ilog2i(x)) as i32;
@@ -498,7 +565,7 @@ fn write_png_block(key: &[u8], chunk: &[u8], output: &mut Vec<u8>) {
 }
 
 // Integer approximation for i * log2(i) - much faster than float calculations
-fn ilog2i(i: u32) -> u32 {
+const fn ilog2i(i: u32) -> u32 {
     let log = 32 - i.leading_zeros() - 1;
     i * log + ((i - (1 << log)) << 1)
 }

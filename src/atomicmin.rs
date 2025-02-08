@@ -6,6 +6,7 @@ pub struct AtomicMin {
 }
 
 impl AtomicMin {
+    #[must_use]
     pub fn new(init: Option<usize>) -> Self {
         Self {
             val: AtomicUsize::new(init.unwrap_or(usize::MAX)),
@@ -19,11 +20,6 @@ impl AtomicMin {
         } else {
             Some(val)
         }
-    }
-
-    /// Unset value is usize_max
-    pub fn as_atomic_usize(&self) -> &AtomicUsize {
-        &self.val
     }
 
     /// Try a new value, returning true if it is the new minimum

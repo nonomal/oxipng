@@ -2,6 +2,7 @@ use std::{fmt, fmt::Display, mem::transmute};
 
 use crate::error::PngError;
 
+/// Filtering strategy for use in [`Options`][crate::Options]
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum RowFilter {
@@ -125,8 +126,8 @@ impl RowFilter {
             return;
         }
 
-        let mut pixels: Vec<_> = data.chunks_mut(bpp).collect();
-        let prev_pixels: Vec<_> = prev_line.chunks(bpp).collect();
+        let mut pixels: Vec<_> = data.chunks_exact_mut(bpp).collect();
+        let prev_pixels: Vec<_> = prev_line.chunks_exact(bpp).collect();
         for i in 0..pixels.len() {
             if pixels[i].iter().skip(color_bytes).all(|b| *b == 0) {
                 // If the first pixel in the row is transparent, find the next non-transparent pixel and pretend

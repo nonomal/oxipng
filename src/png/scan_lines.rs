@@ -11,6 +11,7 @@ pub struct ScanLines<'a> {
 }
 
 impl<'a> ScanLines<'a> {
+    #[must_use]
     pub fn new(png: &'a PngImage, has_filter: bool) -> Self {
         Self {
             iter: ScanLineRanges::new(png, has_filter),
@@ -22,6 +23,7 @@ impl<'a> ScanLines<'a> {
 
 impl<'a> Iterator for ScanLines<'a> {
     type Item = ScanLine<'a>;
+
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let (len, pass, num_pixels) = self.iter.next()?;
@@ -79,6 +81,7 @@ impl ScanLineRanges {
 
 impl Iterator for ScanLineRanges {
     type Item = (usize, Option<u8>, usize);
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.left == 0 {
             return None;
@@ -154,7 +157,7 @@ impl Iterator for ScanLineRanges {
             (self.width, None)
         };
         let bits_per_line = pixels_per_line as usize * self.bits_per_pixel;
-        let mut len = (bits_per_line + 7) / 8;
+        let mut len = bits_per_line.div_ceil(8);
         if self.has_filter {
             len += 1;
         }

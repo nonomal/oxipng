@@ -50,14 +50,6 @@ preset, regardless of the order you write the arguments.")
                 .hide_possible_values(true),
         )
         .arg(
-            Arg::new("backup")
-                .help("Back up modified files")
-                .short('b')
-                .long("backup")
-                .hide(true)
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
             Arg::new("recursive")
                 .help("Recurse input directories, optimizing all PNG files")
                 .long_help("\
@@ -344,6 +336,7 @@ Recommended use is with '-o max' and '--fast'.")
 Set the number of iterations to use for Zopfli compression. Using fewer iterations may \
 speed up compression for large files. This option requires '--zopfli' to be set.")
                 .long("zi")
+                .value_name("iterations")
                 .default_value("15")
                 .value_parser(1..=255)
                 .requires("zopfli"),

@@ -18,18 +18,20 @@ mod rayon;
 
 #[cfg(feature = "zopfli")]
 use std::num::NonZeroU8;
-use std::{ffi::OsString, fs::DirBuilder, io::Write, path::PathBuf, process::exit, time::Duration};
+use std::{
+    ffi::OsString, fs::DirBuilder, io::Write, path::PathBuf, process::ExitCode, time::Duration,
+};
 
 use clap::ArgMatches;
 mod cli;
 use indexmap::IndexSet;
 use log::{error, warn, Level, LevelFilter};
-use oxipng::{Deflaters, InFile, Options, OutFile, RowFilter, StripChunks};
+use oxipng::{Deflaters, InFile, Options, OutFile, PngError, RowFilter, StripChunks};
 use rayon::prelude::*;
 
 use crate::cli::DISPLAY_CHUNKS;
 
-fn main() {
+fn main() -> ExitCode {
     let matches = cli::build_command()
         // Set the value parser for filters which isn't appropriate to do in the build_command function
         .mut_arg("filters", |arg| {
@@ -42,16 +44,11 @@ fn main() {
         .after_long_help("")
         .get_matches_from(std::env::args());
 
-    if matches.get_flag("backup") {
-        eprintln!("The --backup flag is no longer supported. Please use --out or --dir to preserve your existing files.");
-        exit(1)
-    }
-
     let (out_file, out_dir, opts) = match parse_opts_into_struct(&matches) {
         Ok(x) => x,
         Err(x) => {
             error!("{}", x);
-            exit(1)
+            return ExitCode::FAILURE;
         }
     };
 
@@ -75,26 +72,43 @@ fn main() {
         true,
     );
 
-    let success = files.into_par_iter().filter(|(input, output)| {
-        match oxipng::optimize(input, output, &opts) {
-            // For optimizing single files, this will return the correct exit code always.
-            // For recursive optimization, the correct choice is a bit subjective.
-            // We're choosing to return a 0 exit code if ANY file in the set
-            // runs correctly.
-            // The reason for this is that recursion may pick up files that are not
-            // PNG files, and return an error for them.
-            // We don't really want to return an error code for those files.
-            Ok(_) => true,
-            Err(e) => {
-                error!("{}: {}", input, e);
-                false
+    let summary = files
+        .into_par_iter()
+        .map(|(input, output)| {
+            match oxipng::optimize(&input, &output, &opts) {
+                // For optimizing single files, this will return the correct exit code always.
+                // For recursive optimization, the correct choice is a bit subjective.
+                // We're choosing to return a 0 exit code if ANY file in the set
+                // runs correctly.
+                // The reason for this is that recursion may pick up files that are not
+                // PNG files, and return an error for them.
+                // We don't really want to return an error code for those files.
+                Ok(_) => OptimizationResult::Ok,
+                Err(e @ PngError::C2PAMetadataPreventsChanges) => {
+                    warn!("{input}: {e}");
+                    OptimizationResult::Skipped
+                }
+                Err(e) => {
+                    error!("{input}: {e}");
+                    OptimizationResult::Failed
+                }
             }
-        }
-    });
+        })
+        .min()
+        .unwrap_or(OptimizationResult::Skipped);
 
-    if success.count() == 0 {
-        exit(1);
+    match summary {
+        OptimizationResult::Ok => ExitCode::SUCCESS,
+        OptimizationResult::Failed => ExitCode::FAILURE,
+        OptimizationResult::Skipped => ExitCode::from(3),
     }
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+enum OptimizationResult {
+    Ok,
+    Failed,
+    Skipped,
 }
 
 fn collect_files(
@@ -210,8 +224,8 @@ fn parse_opts_into_struct(
     let out_dir = if let Some(path) = matches.get_one::<PathBuf>("output_dir") {
         if !path.exists() {
             match DirBuilder::new().recursive(true).create(path) {
-                Ok(_) => (),
-                Err(x) => return Err(format!("Could not create output directory {}", x)),
+                Ok(()) => (),
+                Err(x) => return Err(format!("Could not create output directory {x}")),
             };
         } else if !path.is_dir() {
             return Err(format!(
@@ -287,9 +301,9 @@ fn parse_opts_into_struct(
             })
             .collect::<Result<IndexSet<_>, _>>()?;
         if keep_display {
-            names.extend(DISPLAY_CHUNKS.iter().cloned());
+            names.extend(DISPLAY_CHUNKS.iter().copied());
         }
-        opts.strip = StripChunks::Keep(names)
+        opts.strip = StripChunks::Keep(names);
     }
 
     if let Some(strip) = matches.get_one::<String>("strip") {
@@ -311,7 +325,7 @@ fn parse_opts_into_struct(
                     }
                     let name = parse_chunk_name(x)?;
                     if FORBIDDEN_CHUNKS.contains(&name) {
-                        return Err(format!("{} chunk is not allowed to be stripped", x));
+                        return Err(format!("{x} chunk is not allowed to be stripped"));
                     }
                     Ok(name)
                 })
@@ -352,7 +366,7 @@ fn parse_chunk_name(name: &str) -> Result<[u8; 4], String> {
     name.trim()
         .as_bytes()
         .try_into()
-        .map_err(|_| format!("Invalid chunk name {}", name))
+        .map_err(|_| format!("Invalid chunk name {name}"))
 }
 
 fn parse_numeric_range_opts(

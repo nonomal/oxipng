@@ -1,4 +1,4 @@
-oxipng 9.1.2
+oxipng 9.1.3
 Losslessly improve compression of PNG files
 
 Usage: oxipng [OPTIONS] <files>...
@@ -167,6 +167,12 @@ Options:
   -Z, --zopfli
           Use the much slower but stronger Zopfli compressor for main compression trials.
           Recommended use is with '-o max' and '--fast'.
+
+      --zi <iterations>
+          Set the number of iterations to use for Zopfli compression. Using fewer iterations may
+          speed up compression for large files. This option requires '--zopfli' to be set.
+          
+          [default: 15]
 
       --timeout <secs>
           Maximum amount of time, in seconds, to spend on optimizations. Oxipng will check the

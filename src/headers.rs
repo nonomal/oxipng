@@ -8,7 +8,7 @@ use crate::{
     display_chunks::DISPLAY_CHUNKS,
     error::PngError,
     interlace::Interlacing,
-    AtomicMin, Deflaters, PngResult,
+    Deflaters, PngResult,
 };
 
 #[derive(Debug, Clone)]
@@ -30,7 +30,7 @@ impl IhdrData {
     /// Bits per pixel
     #[must_use]
     #[inline]
-    pub fn bpp(&self) -> usize {
+    pub const fn bpp(&self) -> usize {
         self.bit_depth as usize * self.color_type.channels_per_pixel() as usize
     }
 
@@ -42,7 +42,7 @@ impl IhdrData {
         let bpp = self.bpp();
 
         fn bitmap_size(bpp: usize, w: usize, h: usize) -> usize {
-            ((w * bpp + 7) / 8) * h
+            (w * bpp).div_ceil(8) * h
         }
 
         if self.interlaced == Interlacing::None {
@@ -71,10 +71,12 @@ pub struct Chunk {
     pub data: Vec<u8>,
 }
 
+/// [`Options`][crate::Options] to use when stripping chunks (metadata)
 #[derive(Debug, PartialEq, Eq, Clone)]
-/// Options to use when stripping chunks
 pub enum StripChunks {
     /// None
+    ///
+    /// ...except caBX chunk if it contains a C2PA.org signature.
     None,
     /// Remove specific chunks
     Strip(IndexSet<[u8; 4]>),
@@ -89,11 +91,11 @@ pub enum StripChunks {
 impl StripChunks {
     pub(crate) fn keep(&self, name: &[u8; 4]) -> bool {
         match &self {
-            StripChunks::None => true,
-            StripChunks::Keep(names) => names.contains(name),
-            StripChunks::Strip(names) => !names.contains(name),
-            StripChunks::Safe => DISPLAY_CHUNKS.contains(name),
-            StripChunks::All => false,
+            Self::None => true,
+            Self::Keep(names) => names.contains(name),
+            Self::Strip(names) => !names.contains(name),
+            Self::Safe => DISPLAY_CHUNKS.contains(name),
+            Self::All => false,
         }
     }
 }
@@ -111,6 +113,36 @@ pub struct RawChunk<'a> {
     pub data: &'a [u8],
 }
 
+impl RawChunk<'_> {
+    // Is it a chunk for C2PA/CAI JUMBF metadata
+    pub(crate) fn is_c2pa(&self) -> bool {
+        if self.name == *b"caBX" {
+            if let Some((b"jumb", data)) = parse_jumbf_box(self.data) {
+                if let Some((b"jumd", data)) = parse_jumbf_box(data) {
+                    if data.get(..4) == Some(b"c2pa") {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+fn parse_jumbf_box(data: &[u8]) -> Option<(&[u8], &[u8])> {
+    if data.len() < 8 {
+        return None;
+    }
+    let (len, rest) = data.split_at(4);
+    let len = read_be_u32(len) as usize;
+    if len < 8 || len > data.len() {
+        return None;
+    }
+    let (box_name, data) = rest.split_at(4);
+    let data = data.get(..len - 8)?;
+    Some((box_name, data))
+}
+
 pub fn parse_next_chunk<'a>(
     byte_data: &'a [u8],
     byte_offset: &mut usize,
@@ -121,32 +153,25 @@ pub fn parse_next_chunk<'a>(
             .get(*byte_offset..*byte_offset + 4)
             .ok_or(PngError::TruncatedData)?,
     );
+    if byte_data.len() < *byte_offset + 12 + length as usize {
+        return Err(PngError::TruncatedData);
+    }
     *byte_offset += 4;
 
     let chunk_start = *byte_offset;
-    let chunk_name = byte_data
-        .get(chunk_start..chunk_start + 4)
-        .ok_or(PngError::TruncatedData)?;
+    let chunk_name = &byte_data[chunk_start..chunk_start + 4];
     if chunk_name == b"IEND" {
         // End of data
         return Ok(None);
     }
     *byte_offset += 4;
 
-    let data = byte_data
-        .get(*byte_offset..*byte_offset + length as usize)
-        .ok_or(PngError::TruncatedData)?;
+    let data = &byte_data[*byte_offset..*byte_offset + length as usize];
     *byte_offset += length as usize;
-    let crc = read_be_u32(
-        byte_data
-            .get(*byte_offset..*byte_offset + 4)
-            .ok_or(PngError::TruncatedData)?,
-    );
+    let crc = read_be_u32(&byte_data[*byte_offset..*byte_offset + 4]);
     *byte_offset += 4;
 
-    let chunk_bytes = byte_data
-        .get(chunk_start..chunk_start + 4 + length as usize)
-        .ok_or(PngError::TruncatedData)?;
+    let chunk_bytes = &byte_data[chunk_start..chunk_start + 4 + length as usize];
     if !fix_errors && crc32(chunk_bytes) != crc {
         return Err(PngError::new(&format!(
             "CRC Mismatch in {} chunk; May be recoverable by using --fix",
@@ -170,13 +195,13 @@ pub fn parse_ihdr_chunk(
             0 => ColorType::Grayscale {
                 transparent_shade: trns_data
                     .filter(|t| t.len() >= 2)
-                    .map(|t| u16::from_be_bytes([t[0], t[1]])),
+                    .map(|t| read_be_u16(&t[0..2])),
             },
             2 => ColorType::RGB {
                 transparent_color: trns_data.filter(|t| t.len() >= 6).map(|t| RGB16 {
-                    r: u16::from_be_bytes([t[0], t[1]]),
-                    g: u16::from_be_bytes([t[2], t[3]]),
-                    b: u16::from_be_bytes([t[4], t[5]]),
+                    r: read_be_u16(&t[0..2]),
+                    g: read_be_u16(&t[2..4]),
+                    b: read_be_u16(&t[4..6]),
                 }),
             },
             3 => ColorType::Indexed {
@@ -200,7 +225,7 @@ fn palette_to_rgba(
 ) -> Result<Vec<RGBA8>, PngError> {
     let palette_data = palette_data.ok_or_else(|| PngError::new("no palette in indexed image"))?;
     let mut palette: Vec<_> = palette_data
-        .chunks(3)
+        .chunks_exact(3)
         .map(|color| RGBA8::new(color[0], color[1], color[2], 255))
         .collect();
 
@@ -213,7 +238,12 @@ fn palette_to_rgba(
 }
 
 #[inline]
-fn read_be_u32(bytes: &[u8]) -> u32 {
+pub fn read_be_u16(bytes: &[u8]) -> u16 {
+    u16::from_be_bytes(bytes.try_into().unwrap())
+}
+
+#[inline]
+pub fn read_be_u32(bytes: &[u8]) -> u32 {
     u32::from_be_bytes(bytes.try_into().unwrap())
 }
 
@@ -245,9 +275,9 @@ pub fn extract_icc(iccp: &Chunk) -> Option<Vec<u8>> {
     }
 }
 
-/// Construct an iCCP chunk by compressing the ICC profile
-pub fn construct_iccp(icc: &[u8], deflater: Deflaters) -> PngResult<Chunk> {
-    let mut compressed = deflater.deflate(icc, &AtomicMin::new(None))?;
+/// Make an iCCP chunk by compressing the ICC profile
+pub fn make_iccp(icc: &[u8], deflater: Deflaters, max_size: Option<usize>) -> PngResult<Chunk> {
+    let mut compressed = deflater.deflate(icc, max_size)?;
     let mut data = Vec::with_capacity(compressed.len() + 5);
     data.extend(b"icc"); // Profile name - generally unused, can be anything
     data.extend([0, 0]); // Null separator, zlib compression method
